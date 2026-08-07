@@ -1,0 +1,9 @@
+{
+  "_comment": "The mock adapter accepts the internal unified shape directly, so you can exercise the whole pipeline with no platform account. POST this to any /api/internal/webhooks/{platform} endpoint while that channel is in sandbox mode.",
+  "external_user_id": "sandbox-user-1",
+  "conversation_id": "sandbox-user-1",
+  "external_message_id": "sandbox-0001",
+  "sender_name": "Sandbox Contact",
+  "text": "How much does the starter plan cost?",
+  "message_type": "text"
+}

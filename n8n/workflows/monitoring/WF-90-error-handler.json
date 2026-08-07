@@ -1,0 +1,82 @@
+{
+  "name": "WF-90 · Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf90-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [-600, 300],
+      "notes": "Set as errorWorkflow on every other workflow. Fires when a workflow throws past its own error outputs."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shape n8n's error payload into the workflow_runs record the backend expects.\n// Secrets are stripped: an error body can otherwise carry an Authorization header.\nconst SENSITIVE = /authorization|token|secret|api[_-]?key|password/i;\n\nfunction scrub(value, depth = 0) {\n  if (depth > 4 || value == null) return value;\n  if (Array.isArray(value)) return value.map((v) => scrub(v, depth + 1));\n  if (typeof value !== 'object') return value;\n  const out = {};\n  for (const [k, v] of Object.entries(value)) {\n    out[k] = SENSITIVE.test(k) ? '[redacted]' : scrub(v, depth + 1);\n  }\n  return out;\n}\n\nconst results = [];\nfor (const item of $input.all()) {\n  const e = item.json.execution ?? {};\n  const w = item.json.workflow ?? {};\n  const code = (w.name ?? '').split(' ')[0] || 'UNKNOWN';\n  results.push({\n    json: {\n      workflow_code: code,\n      n8n_execution_id: String(e.id ?? ''),\n      status: 'dead_letter',\n      error: String(e.error?.message ?? 'Unknown workflow failure').slice(0, 2000),\n      failed_node: e.lastNodeExecuted ?? null,\n      input_payload: scrub(e.error?.node ?? {}),\n      finished_at: new Date().toISOString(),\n    },\n  });\n}\nreturn results;"
+      },
+      "id": "wf90-shape",
+      "name": "Shape & Redact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-380, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/workflow-runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "wf90-record",
+      "name": "Record Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "notes": "Writes to workflow_runs and audit_logs. The Workflows page surfaces these as failed automation jobs."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/notifications",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ kind: 'workflow_failure', title: $json.workflow_code + ' failed', body: $json.error, link: '/workflows' }) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "wf90-notify",
+      "name": "Notify Admins",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [60, 300],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Error Trigger": { "main": [[{ "node": "Shape & Redact", "type": "main", "index": 0 }]] },
+    "Shape & Redact": { "main": [[{ "node": "Record Failure", "type": "main", "index": 0 }]] },
+    "Record Failure": { "main": [[{ "node": "Notify Admins", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "saveDataErrorExecution": "all" },
+  "tags": [{ "name": "monitoring" }],
+  "meta": {
+    "description": "Central failure sink. Redacts credentials out of error payloads, records the run, and notifies admins."
+  }
+}

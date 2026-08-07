@@ -1,0 +1,9 @@
+{
+  "for_user_id": "X_ACCOUNT_ID",
+  "tweet_create_events": [{
+    "id_str": "1900000000000000001",
+    "conversation_id": "1900000000000000001",
+    "text": "@yourbrand booking a demo for next week — who do I talk to?",
+    "user": { "id_str": "x_7781", "name": "Nadia K", "screen_name": "nadiak" }
+  }]
+}

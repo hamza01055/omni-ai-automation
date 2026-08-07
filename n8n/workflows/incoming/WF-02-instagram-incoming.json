@@ -1,0 +1,691 @@
+{
+  "name": "WF-02 \u00b7 Instagram Incoming",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "instagram",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "wf02-webhook",
+      "name": "Webhook \u00b7 Instagram",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        300
+      ],
+      "webhookId": "omni-instagram-inbound",
+      "notes": "Meta posts here. Point the Instagram app's Callback URL at this path."
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "EVENT_RECEIVED",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "wf02-ack",
+      "name": "Ack 200 Immediately",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -500,
+        300
+      ],
+      "notes": "Meta retries for ~24h on any non-200. Acknowledge first, then process \u2014 never make the platform wait on the AI call."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Guard clause: only forward payloads that actually contain messages.\n// Status-only callbacks (delivered/read) go down the status branch instead.\nconst items = [];\nfor (const item of $input.all()) {\n  const body = item.json.body ?? item.json;\n  const entries = body.entry ?? [];\n  let hasMessages = false;\n  let hasStatuses = false;\n  for (const entry of entries) {\n    for (const change of entry.changes ?? []) {\n      const value = change.value ?? {};\n      if ((value.messages ?? []).length) hasMessages = true;\n      if ((value.statuses ?? []).length) hasStatuses = true;\n    }\n  }\n  items.push({\n    json: {\n      body,\n      signature: item.json.headers?.['x-hub-signature-256'] ?? null,\n      hasMessages,\n      hasStatuses,\n    },\n  });\n}\nreturn items;"
+      },
+      "id": "wf02-classify",
+      "name": "Classify Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-messages",
+              "leftValue": "={{ $json.hasMessages }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wf02-is-message",
+      "name": "Contains a Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -60,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/webhooks/instagram",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            },
+            {
+              "name": "X-Hub-Signature-256",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "X-Workflow-Code",
+              "value": "WF-02"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "wf02-ingest",
+      "name": "Normalize & Store (FastAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "notes": "The backend verifies the signature itself, normalizes via InstagramAdapter, de-duplicates on (org, platform, external_message_id), and returns the stored message plus its conversation."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/ai/route",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message_id: $json.message_id, conversation_id: $json.conversation_id, organization_id: $json.organization_id }) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "wf02-router",
+      "name": "AI Router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput",
+      "notes": "Returns { intent, confidence, action, lead_score, needs_human }."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.needs_human }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Human"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "qualify",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Sales"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "answer",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Support"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": 0
+        }
+      },
+      "id": "wf02-switch",
+      "name": "Route by Decision",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        620,
+        200
+      ],
+      "notes": "Fallback output is Human. When the router is unsure about its own output, a person sees it."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/approvals",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ subject_type: 'message', conversation_id: $json.conversation_id, reason: $json.escalation_reason ?? 'Low confidence or sensitive intent', confidence: $json.confidence, organization_id: $json.organization_id }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "wf02-human",
+      "name": "Queue for Human",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        60
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/ai/sales",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ conversation_id: $json.conversation_id, message_id: $json.message_id, organization_id: $json.organization_id }) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "wf02-sales",
+      "name": "Sales Agent \u00b7 Qualify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/ai/support",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ conversation_id: $json.conversation_id, message_id: $json.message_id, organization_id: $json.organization_id }) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "wf02-support",
+      "name": "Support Agent \u00b7 RAG Answer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        340
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_human }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            },
+            {
+              "leftValue": "={{ $json.answer }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wf02-safe-to-send",
+      "name": "Safe to Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        340
+      ],
+      "notes": "Second gate. The agent may downgrade its own confidence after searching the knowledge base, so the check happens again here."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ conversation_id: $json.conversation_id, text: $json.answer, sender_type: 'ai', ai_run_id: $json.ai_run_id, confidence: $json.confidence, organization_id: $json.organization_id }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "wf02-send",
+      "name": "Send via Instagram API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        280
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "notes": "The backend owns the credential and picks the live or mock adapter. n8n never holds a platform token."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/webhooks/instagram/status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "wf02-status",
+      "name": "Record Delivery Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        420
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/workflow-runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workflow_code: 'WF-02', n8n_execution_id: $execution.id, status: 'failed', platform: 'instagram', error: JSON.stringify($json.error ?? $json), input_payload: $json }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "wf02-deadletter",
+      "name": "Dead Letter \u00b7 Manual Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        540
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Every error output converges here. The run shows up on the Workflows page as a failure needing attention."
+    }
+  ],
+  "connections": {
+    "Webhook \u00b7 Instagram": {
+      "main": [
+        [
+          {
+            "node": "Ack 200 Immediately",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack 200 Immediately": {
+      "main": [
+        [
+          {
+            "node": "Classify Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Payload": {
+      "main": [
+        [
+          {
+            "node": "Contains a Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contains a Message?": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Store (FastAPI)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Delivery Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Store (FastAPI)": {
+      "main": [
+        [
+          {
+            "node": "AI Router",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Dead Letter \u00b7 Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Router": {
+      "main": [
+        [
+          {
+            "node": "Route by Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Dead Letter \u00b7 Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Decision": {
+      "main": [
+        [
+          {
+            "node": "Queue for Human",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sales Agent \u00b7 Qualify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Support Agent \u00b7 RAG Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Agent \u00b7 Qualify": {
+      "main": [
+        [
+          {
+            "node": "Send via Instagram API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Dead Letter \u00b7 Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Support Agent \u00b7 RAG Answer": {
+      "main": [
+        [
+          {
+            "node": "Safe to Send?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Dead Letter \u00b7 Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safe to Send?": {
+      "main": [
+        [
+          {
+            "node": "Send via Instagram API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue for Human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Instagram API": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Dead Letter \u00b7 Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue for Human": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Dead Letter \u00b7 Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "errorWorkflow": "WF-90"
+  },
+  "tags": [
+    {
+      "name": "incoming"
+    },
+    {
+      "name": "instagram"
+    }
+  ],
+  "pinData": {},
+  "meta": {
+    "description": "Inbound Instagram: same architecture as WF-02. The only differences are the webhook path, the adapter the backend selects, and the delivery-status branch."
+  }
+}

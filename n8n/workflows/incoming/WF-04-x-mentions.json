@@ -1,0 +1,231 @@
+{
+  "name": "WF-04 · X Mentions & DMs",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 5 }] }
+      },
+      "id": "wf04-cron",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-720, 300],
+      "notes": "X uses polling rather than webhooks here. Account Activity API access is a separately gated product, so this workflow pulls mentions on a schedule instead of pretending to receive push events."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/channels/x/poll",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" },
+            { "name": "X-Workflow-Code", "value": "WF-04" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ since_cursor: 'auto' }) }}",
+        "options": { "timeout": 45000 }
+      },
+      "id": "wf04-poll",
+      "name": "Poll Mentions (FastAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-480, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "notes": "The backend holds the cursor (last seen tweet id) per channel, so a missed run catches up rather than double-processing."
+    },
+    {
+      "parameters": { "options": {} },
+      "id": "wf04-split",
+      "name": "Split New Messages",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [-260, 300],
+      "notes": "Field: messages"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/ai/route",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message_id: $json.message_id, conversation_id: $json.conversation_id, organization_id: $json.organization_id }) }}",
+        "options": { "timeout": 45000 }
+      },
+      "id": "wf04-router",
+      "name": "AI Router",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-40, 300],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_human }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "false", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "wf04-gate",
+      "name": "Safe to Reply Publicly?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [180, 300],
+      "notes": "The bar is higher on X than on DM channels: a reply here is public and permanent, so anything below the auto threshold goes to a person."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/ai/support",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ conversation_id: $json.conversation_id, message_id: $json.message_id, organization_id: $json.organization_id, max_chars: 280 }) }}",
+        "options": { "timeout": 45000 }
+      },
+      "id": "wf04-support",
+      "name": "Support Agent (280 char limit)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 220],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ conversation_id: $json.conversation_id, text: $json.answer, sender_type: 'ai', ai_run_id: $json.ai_run_id, confidence: $json.confidence, organization_id: $json.organization_id }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "wf04-send",
+      "name": "Reply in Thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [620, 220],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/approvals",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ subject_type: 'message', conversation_id: $json.conversation_id, reason: $json.escalation_reason ?? 'Public reply requires review', confidence: $json.confidence, organization_id: $json.organization_id }) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "wf04-human",
+      "name": "Queue for Human",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 400],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OMNI_BACKEND_URL }}/api/internal/workflow-runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.OMNI_INTERNAL_TOKEN }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workflow_code: 'WF-04', n8n_execution_id: $execution.id, status: 'failed', platform: 'x', error: JSON.stringify($json.error ?? $json) }) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "wf04-deadletter",
+      "name": "Dead Letter · Manual Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [620, 560],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": { "main": [[{ "node": "Poll Mentions (FastAPI)", "type": "main", "index": 0 }]] },
+    "Poll Mentions (FastAPI)": {
+      "main": [
+        [{ "node": "Split New Messages", "type": "main", "index": 0 }],
+        [{ "node": "Dead Letter · Manual Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split New Messages": { "main": [[{ "node": "AI Router", "type": "main", "index": 0 }]] },
+    "AI Router": {
+      "main": [
+        [{ "node": "Safe to Reply Publicly?", "type": "main", "index": 0 }],
+        [{ "node": "Dead Letter · Manual Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Safe to Reply Publicly?": {
+      "main": [
+        [{ "node": "Support Agent (280 char limit)", "type": "main", "index": 0 }],
+        [{ "node": "Queue for Human", "type": "main", "index": 0 }]
+      ]
+    },
+    "Support Agent (280 char limit)": {
+      "main": [
+        [{ "node": "Reply in Thread", "type": "main", "index": 0 }],
+        [{ "node": "Dead Letter · Manual Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Reply in Thread": { "main": [[], [{ "node": "Dead Letter · Manual Review", "type": "main", "index": 0 }]] },
+    "Queue for Human": { "main": [[], [{ "node": "Dead Letter · Manual Review", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "WF-90"
+  },
+  "tags": [{ "name": "incoming" }, { "name": "x" }],
+  "meta": {
+    "description": "Polls X mentions on a schedule, routes them, and replies in-thread only when confidence clears the auto threshold. Public replies are held to a stricter bar than DMs."
+  }
+}

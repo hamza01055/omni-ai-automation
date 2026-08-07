@@ -1,0 +1,39 @@
+# ── Web ─────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+websockets==14.1
+
+# ── Data ────────────────────────────────────────────
+pydantic==2.10.4
+pydantic-settings==2.7.0
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+pgvector==0.3.6
+redis[hiredis]==5.2.1
+
+# ── Auth & crypto ───────────────────────────────────
+pyjwt==2.10.1
+argon2-cffi==23.1.0
+cryptography==44.0.0
+
+# ── AI ──────────────────────────────────────────────
+openai==1.59.6
+tiktoken==0.8.0
+pypdf==5.1.0
+
+# ── HTTP / integrations ─────────────────────────────
+httpx==0.28.1
+tenacity==9.0.0
+authlib==1.4.0
+
+# ── Ops ─────────────────────────────────────────────
+structlog==24.4.0
+slowapi==0.1.9
+
+# ── Dev / test ──────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.25.2
+aiosqlite==0.20.0
+ruff==0.8.6

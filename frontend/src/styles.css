@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --surface: theme('colors.ink.50');
+    --surface-raised: #ffffff;
+    --line: theme('colors.ink.100');
+    --text: theme('colors.ink.900');
+    --text-muted: theme('colors.ink.400');
+  }
+  .dark {
+    --surface: theme('colors.ink.950');
+    --surface-raised: theme('colors.ink.900');
+    --line: theme('colors.ink.700');
+    --text: theme('colors.ink.50');
+    --text-muted: theme('colors.ink.300');
+  }
+
+  html { -webkit-font-smoothing: antialiased; }
+  body {
+    @apply font-sans antialiased;
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  /* Keyboard focus stays visible everywhere. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-signal ring-offset-2;
+    ring-offset-color: var(--surface);
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full;
+    background: var(--line);
+  }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .surface {
+    background: var(--surface-raised);
+    border-color: var(--line);
+    @apply rounded-card border;
+  }
+  .muted { color: var(--text-muted); }
+  .hairline { border-color: var(--line); }
+
+  /* Small uppercase label used for section eyebrows and table headers. */
+  .eyebrow {
+    @apply font-mono text-micro uppercase tracking-[0.12em];
+    color: var(--text-muted);
+  }
+}
