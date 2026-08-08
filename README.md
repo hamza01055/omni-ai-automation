@@ -1,4 +1,9 @@
 # OmniAI Automation
+<img width="960" height="540" alt="Screenshot 2026-08-08 051554" src="https://github.com/user-attachments/assets/3412f854-8e9f-48e4-9ff8-ae298f0ff4f8" />
+<img width="960" height="540" alt="Screenshot 2026-08-08 051406" src="https://github.com/user-attachments/assets/c379d773-d554-4eda-ad27-2d53c3533293" />
+<img width="960" height="540" alt="Screenshot 2026-08-08 054421" src="https://github.com/user-attachments/assets/bd63ed79-7cd4-49f6-addc-45fa331f3dd8" />
+<img width="960" height="540" alt="Screenshot 2026-08-08 051642" src="https://github.com/user-attachments/assets/b2205afd-9ef2-46d4-97ea-a6a43883c5a1" />
+<img width="960" height="540" alt="Screenshot 2026-08-08 051635" src="https://github.com/user-attachments/assets/0e8f6d73-0a98-4171-8ac8-bfb573882b1b" />
 
 Unified AI automation across WhatsApp, Instagram, Facebook and X. Messages from
 every channel arrive in one shape and one queue. The AI answers what it is
