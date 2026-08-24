@@ -5,6 +5,7 @@ every channel arrive in one shape and one queue. The AI answers what it is
 confident about and hands a person everything else, with the reason attached.
 
 
+
 n8n orchestrates. FastAPI owns the data model, the AI layer and the API. React
 provides the console.
 
